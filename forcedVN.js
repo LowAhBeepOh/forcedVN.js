@@ -1,10 +1,10 @@
 // ═══════════════════════════════════════════════════════════════
-//  ForcedVN.js: Visual Novel Engine for JavaScript that my friend forced me to make for his game.
+//  ForcedVN — forcedVN.js
 //
 //  USAGE:
 //    <script src="forcedVN.js"></script>
 //    Then call VN.init({ ... }) at the bottom of this file,
-//    or put your game in a separate my-game.js loaded after.
+//    or put your game in a separate .js file loaded after.
 //
 //  SPRITE PATHS:
 //    sprite: "assets/sprites/P1.png"   ← local file
@@ -64,8 +64,8 @@ html, body { width:100%; height:100%; background:var(--vn-bg); font-family:var(-
 #vn-transition { position:absolute; inset:0; z-index:5; pointer-events:none; opacity:0; background:#000; }
 
 /* Sprites */
-#vn-sprites { position:absolute; inset:0; display:flex; align-items:flex-end; pointer-events:none; }
-.vn-sprite { position:absolute; bottom:0; max-height:80%; object-fit:contain; transition:opacity 0.4s, transform 0.4s, filter 0.4s; }
+#vn-sprites { position:absolute; inset:0; display:flex; align-items:flex-end; pointer-events:none; perspective:1000px; }
+.vn-sprite { position:absolute; bottom:0; max-height:80%; object-fit:contain; transition:opacity 0.4s, transform 0.4s, filter 0.4s; transform-style:preserve-3d; }
 .vn-sprite.left   { left:10%; }
 .vn-sprite.center { left:50%; transform:translateX(-50%); }
 .vn-sprite.right  { right:10%; }
@@ -362,36 +362,83 @@ window.VN = (() => {
   }
 
   // ── SHOW SPRITE ────────────────────────────────────────────
-  function cmdShow({ char, pos, expr }) {
+  function cmdShow(cmd) {
+    const { char, pos, expr, reset, ...props } = cmd;
     const charDef = script.characters?.[char];
     if (!charDef) { console.warn('[VN] Character not defined:', char); return; }
 
-    let el = activeSprites[char]?.el;
-    const resolvedPos = pos || activeSprites[char]?.pos || 'center';
-
-    if (!el) {
-      el = document.createElement('img');
-      el.className = `vn-sprite ${resolvedPos}`;
+    let active = activeSprites[char];
+    if (!active) {
+      const el = document.createElement('img');
+      el.className = `vn-sprite center`; // default pos
       el.alt = char;
       $('vn-sprites').appendChild(el);
-      activeSprites[char] = { el, pos: resolvedPos, expr };
-    } else {
-      el.className = `vn-sprite ${resolvedPos}`;
-      activeSprites[char].pos = resolvedPos;
+      active = activeSprites[char] = { el, pos:'center', expr:'default', props:{} };
     }
 
-    let src = '';
+    if (reset) active.props = {};
+    if (pos) active.pos = pos;
+    if (expr) active.expr = expr;
+    // Merge any new props (offset, scale, rotate, flipX, flipY, skew, yaw)
+    Object.assign(active.props, props);
+
+    const { el, pos: resolvedPos, expr: resolvedExpr, props: overrides } = active;
+    el.className = `vn-sprite ${resolvedPos}`;
+
+    let data = null;
     if (charDef.sprites) {
-      src = charDef.sprites[expr || 'default'] || charDef.sprites.default || Object.values(charDef.sprites)[0] || '';
+      data = charDef.sprites[resolvedExpr] || charDef.sprites.default || Object.values(charDef.sprites)[0];
     } else if (charDef.sprite) {
-      src = charDef.sprite;
+      data = charDef.sprite;
     }
 
-    if (src) { el.src = src; el.style.display = ''; }
-    else     { el.style.display = 'none'; }
+    let src = typeof data === 'string' ? data : data?.src || '';
+    
+    // Fallback order: Sprite Data -> Character Def -> Default (null/1)
+    const getVal = (key, defVal) => {
+      if (overrides[key] !== undefined) return overrides[key];
+      if (data && typeof data === 'object' && data[key] !== undefined) return data[key];
+      if (charDef[key] !== undefined) return charDef[key];
+      return defVal;
+    };
+
+    const offset = getVal('offset', null);
+    const scale  = getVal('scale', 1);
+    const rotate = getVal('rotate', 0);
+    const flipX  = getVal('flipX', false);
+    const flipY  = getVal('flipY', false);
+    const skew   = getVal('skew', null);
+    const yaw    = getVal('yaw', 0);
+
+    if (src) {
+      el.src = src;
+      el.style.display = '';
+
+      let transform = resolvedPos === 'center' ? 'translateX(-50%)' : '';
+
+      if (offset) {
+        const [ox, oy] = offset;
+        transform += ` translate(${ox}px, ${-oy}px)`;
+      }
+      if (scale !== 1 || flipX || flipY) {
+        let sx = scale * (flipX ? -1 : 1);
+        let sy = scale * (flipY ? -1 : 1);
+        transform += ` scale(${sx}, ${sy})`;
+      }
+      if (rotate) transform += ` rotate(${rotate}deg)`;
+      if (skew) {
+        const [kx, ky] = skew;
+        transform += ` skew(${kx}deg, ${ky}deg)`;
+      }
+      if (yaw) transform += ` rotateY(${yaw}deg)`;
+
+      el.style.transform = transform;
+      el.style.transformOrigin = 'bottom center';
+    } else {
+      el.style.display = 'none';
+    }
 
     el.classList.remove('hidden', 'dim');
-    activeSprites[char].expr = expr;
   }
 
   function cmdHide({ char }) { activeSprites[char]?.el.classList.add('hidden'); }
@@ -733,7 +780,7 @@ window.VN = (() => {
     scene:      (bg, color, tr)          => ({ type:'scene', bg, color, transition:tr }),
 
     // Sprites
-    show:       (char, pos, expr)        => ({ type:'show', char, pos, expr }),
+    show:       (char, pos, expr, props) => ({ type:'show', char, pos, expr, ...props }),
     hide:       (char)                   => ({ type:'hide', char }),
     dim:        (char)                   => ({ type:'dim', char }),
     undim:      (char)                   => ({ type:'undim', char }),
@@ -773,130 +820,3 @@ window.VN = (() => {
 })();
 
 })(); // end buildEngine IIFE
-
-
-// ═══════════════════════════════════════════════════════════════
-//  YOUR GAME — edit below this line
-// ═══════════════════════════════════════════════════════════════
-
-const { say, narrate, scene, show, hide, dim, undim,
-        choice, jump, call, setVar, addVar, ifVar,
-        pause, notify, end,
-        shake, flash, transition,
-        bgm, stopBgm, sfx, ambience, stopAmb } = VN.cmd;
-
-VN.init({
-  title:    "ForcedVN.js Demo",
-  subtitle: "Read the code to understand stuff. :)",
-
-  start: "start",
-
-  // ── THEME (optional) ──────────────────────────────────────
-  // Uncomment any of these to restyle the engine.
-  // theme: {
-  //   accent:       '#ff6b6b',       // main color (names, arrows, etc.)
-  //   accent2:      '#6bffb8',       // secondary color (notifications)
-  //   bg:           '#0f0a0a',       // page background
-  //   panel:        'rgba(20,8,8,0.94)',
-  //   text:         '#f0e8e8',       // dialogue text color
-  //   font:         "'Georgia', serif", // remember to add the font to your HTML if it's not web-safe everyone!!
-  //   fontMono:     "'Courier New', monospace",
-  //   dialogRadius: '8px',           // rounded corners on dialogue box
-  //   choiceRadius: '4px',
-  //   titleBg:      '#0f0000',       // title screen background
-  // },
-
-  // ── SETTINGS ─────────────────────────────────────────────
-  // List only the settings you want shown. Set to {} for all defaults.
-  settings: {
-    textSpeed:      true,
-    musicVolume:    true,
-    sfxVolume:      true,
-    ambienceVolume: true,
-    autoSave:       true,
-    fullscreen:     true,
-    // Custom setting example (value accessible via settingsState):
-    // subtitles: { label: "Subtitles", type: "toggle", default: true },
-  },
-
-  // Optional callback when the player changes a setting
-  // onSettingChange(key, value, allSettings) { ... }
-
-  // ── VARIABLES ─────────────────────────────────────────────
-  vars: {
-    score: 0,
-  },
-
-  // ── CHARACTERS ────────────────────────────────────────────
-  characters: {
-    a: {
-      name:  "P1",
-      color: "#c89b6e",
-
-      // Single sprite — local file or URL:
-      sprite: "assets/sprites/P1.png",
-      // sprite: "https://placecats.com/300/600",
-
-      // Multiple expressions (use show('a', 'left', 'happy')):
-      // sprites: {
-      //   default: "assets/sprites/P1.png",
-      //   happy:   "assets/sprites/P1_happy.png",
-      //   sad:     "assets/sprites/P1_sad.png",
-      // },
-
-      // Voice blip played on each line:
-      // voice: "assets/voice/P1_blip.wav",
-    },
-    b: {
-      name:  "P2",
-      color: "#7e9fc7",
-      sprite: "assets/sprites/P2.png",
-      // voice: "assets/voice/P2_blip.wav",
-    },
-  },
-
-  // ── LABELS ────────────────────────────────────────────────
-  labels: {
-
-    start: [
-      // scene(bgImage, fallbackColor, transitionType)
-      // transitionType: 'fade' | 'white' | 'dissolve' | 'none'
-      scene("assets/bg/room.png", "#0d0d18", "fade"),
-
-      narrate("This is a narration line."),
-
-      show('a', 'left'),
-      say('a', "Hi, I'm P1."),
-      show('b', 'right'),
-      say('b', "And I'm P2."),
-      say('a', "Make a choice:"),
-      choice([
-        { text: "Choice A",             jump: "branch_a" },
-        { text: "Choice B (score +1)",  jump: "branch_b",
-          addVar: { key:'score', amount:1 } },
-      ]),
-    ],
-
-    branch_a: [
-      sfx("assets/sfx/click.wav"),
-      say('a', "You picked A."),
-      shake(),
-      jump("ending"),
-    ],
-
-    branch_b: [
-      flash("#ffffff", 150),
-      say('b', "You picked B."),
-      notify("Score +1"),
-      jump("ending"),
-    ],
-
-    ending: [
-      scene(null, "#000000", "fade"),
-      // stopBgm(),
-      narrate("The end."),
-      end(),
-    ],
-
-  },
-});
