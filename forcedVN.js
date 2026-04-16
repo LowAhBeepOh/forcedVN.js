@@ -174,6 +174,9 @@ document.body.insertAdjacentHTML('beforeend', `
   <div id="vn-debug"></div>
   <div id="vn-notify"></div>
   <div id="vn-choices"></div>
+  <div id="vn-input-container" style="display:none; position:absolute; bottom:140px; left:50%; transform:translateX(-50%); max-width:600px; width:90%; z-index:100;">
+    <input id="vn-text-input" type="text" placeholder="Enter text..." style="width:100%; padding:12px; font-family:var(--vn-font); font-size:16px; background:var(--vn-panel); color:var(--vn-text); border:1px solid var(--vn-choice-border); border-radius:var(--vn-choice-radius);" />
+  </div>
 
   <div id="vn-box" onclick="VN.advance()">
     <div id="vn-name"></div>
@@ -309,7 +312,13 @@ window.VN = (() => {
       case 'call':      callStack.push({ label:currentLabel, index:stepIndex }); jumpTo(cmd.label); break;
       case 'setVar':    vars[cmd.key] = cmd.val; updateDebug(); runStep(); break;
       case 'addVar':    vars[cmd.key] = (vars[cmd.key]||0) + cmd.amount; updateDebug(); runStep(); break;
+      case 'mulVar':    vars[cmd.key] = (vars[cmd.key]||0) * cmd.amount; updateDebug(); runStep(); break;
+      case 'divVar':    vars[cmd.key] = (vars[cmd.key]||0) / (cmd.amount || 1); updateDebug(); runStep(); break;
+      case 'modVar':    vars[cmd.key] = (vars[cmd.key]||0) % (cmd.amount || 1); updateDebug(); runStep(); break;
+      case 'concatVar': vars[cmd.key] = String(vars[cmd.key]||'') + String(cmd.val); updateDebug(); runStep(); break;
       case 'ifVar':     vars[cmd.key] === cmd.val ? jumpTo(cmd.label) : runStep(); break;
+      case 'ifVarOp':   cmdIfVarOp(cmd); break;
+      case 'input':     cmdInput(cmd); break;
       case 'pause':     setTimeout(runStep, cmd.ms || 1000); break;
       case 'notify':    showNotify(cmd.text); runStep(); break;
       case 'shake':     cmdShake(); break;             // async
@@ -622,10 +631,55 @@ window.VN = (() => {
     tick();
   }
 
-  // ── ADVANCE ────────────────────────────────────────────────
+  // ── CONDITIONAL VARIABLE CHECK ────────────────────────
+  function cmdIfVarOp(cmd) {
+    const val = vars[cmd.key] ?? 0;
+    let condition = false;
+    switch (cmd.op) {
+      case '==': condition = val === cmd.val; break;
+      case '!=': condition = val !== cmd.val; break;
+      case '>':  condition = val > cmd.val; break;
+      case '<':  condition = val < cmd.val; break;
+      case '>=': condition = val >= cmd.val; break;
+      case '<=': condition = val <= cmd.val; break;
+      default: console.warn('[VN] Unknown operator:', cmd.op);
+    }
+    condition ? jumpTo(cmd.label) : runStep();
+  }
+
+  // ── TEXT INPUT ─────────────────────────────────────────
+  function cmdInput(cmd) {
+    const container = $('vn-input-container');
+    const input = $('vn-text-input');
+    
+    $('vn-arrow').classList.remove('visible');
+    container.style.display = 'block';
+    input.value = '';
+    input.placeholder = cmd.placeholder || 'Enter text...';
+    input.focus();
+    waitingInput = false;
+    
+    const handleSubmit = () => {
+      const userInput = input.value;
+      if (cmd.storeIn) vars[cmd.storeIn] = userInput;
+      container.style.display = 'none';
+      input.removeEventListener('keydown', handleKeyDown);
+      runStep();
+    };
+    
+    const handleKeyDown = (e) => {
+      if (e.key === 'Enter') handleSubmit();
+    };
+    
+    input.removeEventListener('keydown', handleKeyDown);
+    input.addEventListener('keydown', handleKeyDown);
+  }
+
+  // ── ADVANCE ────────────────────────────────────────────
   function advance() {
     if ($('vn-choices').classList.contains('active')) return;
     if ($('vn-settings').classList.contains('open'))  return;
+    if ($('vn-input-container').style.display !== 'none') return;
 
     if (typing) {
       clearTimeout(typeTimeout); typing = false;
@@ -779,7 +833,14 @@ window.VN = (() => {
     // Scene  —  transition types: 'fade' | 'white' | 'dissolve' | 'none'
     scene:      (bg, color, tr)          => ({ type:'scene', bg, color, transition:tr }),
 
-    // Sprites
+    // Sprites — show(char, pos, expr, { scale, rotate, offset, flipX, flipY, skew, yaw })
+    // pos: 'left' | 'center' | 'right'
+    // scale: 0.5–2 (numeric multiplier)
+    // rotate: 0–360 (degrees)
+    // offset: [x, y] (pixel offsets)
+    // flipX/flipY: true/false
+    // skew: [x, y] (degrees)
+    // yaw: 0–360 (3D rotation)
     show:       (char, pos, expr, props) => ({ type:'show', char, pos, expr, ...props }),
     hide:       (char)                   => ({ type:'hide', char }),
     dim:        (char)                   => ({ type:'dim', char }),
@@ -793,7 +854,16 @@ window.VN = (() => {
     call:       (label)                  => ({ type:'call', label }),
     setVar:     (key, val)               => ({ type:'setVar', key, val }),
     addVar:     (key, amount)            => ({ type:'addVar', key, amount }),
+    // Advanced variable operations: multiply, divide, modulo, concatenate
+    mulVar:     (key, amount)            => ({ type:'mulVar', key, amount }),
+    divVar:     (key, amount)            => ({ type:'divVar', key, amount }),
+    modVar:     (key, amount)            => ({ type:'modVar', key, amount }),
+    concatVar:  (key, val)               => ({ type:'concatVar', key, val }),
+    // Conditionals: ifVar (equality), ifVarOp (with operators)
     ifVar:      (key, val, label)        => ({ type:'ifVar', key, val, label }),
+    ifVarOp:    (key, op, val, label)    => ({ type:'ifVarOp', key, op, val, label }),
+    // Text input
+    input:      (storeIn, placeholder)   => ({ type:'input', storeIn, placeholder }),
     pause:      (ms)                     => ({ type:'pause', ms }),
     notify:     (text)                   => ({ type:'notify', text }),
     end:        ()                       => ({ type:'end' }),
